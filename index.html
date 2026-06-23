@@ -79,7 +79,10 @@
   .field-name { font-size: 15px; font-weight: 600; }
   .field-hint { font-size: 12px; color: var(--text-3); margin-top: 2px; }
 
-  .scale-row, .choice-row, .yn-row { display: flex; gap: 7px; margin-top: 12px; }
+  .scale-row, .yn-row { display: flex; gap: 7px; margin-top: 12px; }
+  .choice-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+  .choice-row .choice-btn { flex: 1 1 calc(50% - 4px); min-width: calc(50% - 4px); }
+  .choice-row.cols-3 .choice-btn { flex: 1 1 0; min-width: 0; }
   .scale-btn {
     flex: 1; height: 46px; border-radius: var(--radius-sm);
     background: var(--surface-2); border: 0.5px solid var(--line);
@@ -101,6 +104,7 @@
   .choice-btn.on.c-lo { background: var(--green-soft); border-color: var(--green); color: var(--green); }
   .choice-btn.on.c-mid { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
   .choice-btn.on.c-hi { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+  .choice-btn.on.c-neu { background: var(--teal-soft); border-color: var(--teal); color: var(--teal); }
 
   .yn-btn {
     flex: 1; height: 46px; border-radius: var(--radius-sm);
@@ -281,10 +285,10 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const FIELDS_KEY = 'dl_fields_v3';
-const SEED_KEY = 'dl_seeded_v3';
-const ENTRY_PREFIX = 'dl_entry_v3_';
-const STEP_MIN = 5;
+const FIELDS_KEY = 'dl_fields_v4';
+const SEED_KEY = 'dl_seeded_v4';
+const ENTRY_PREFIX = 'dl_entry_v4_';
+const STEP_MIN = 15;
 
 const TYPES = {
   sleep:  { label: '睡眠',     desc: '就寝・起床→時間を自動計算', ic: '◷' },
@@ -298,14 +302,20 @@ const TYPES = {
 
 function presetFields(){
   const giChoices = [
-    { v:'lo',  label:'低GI', sub:'野菜·肉魚·全粒' },
-    { v:'mid', label:'中GI', sub:'ふつう' },
-    { v:'hi',  label:'高GI', sub:'白米·パン·甘い' },
+    { v:'skip', label:'抜き', sub:'食べてない', tone:'neutral' },
+    { v:'lo',   label:'低GI', sub:'野菜·肉魚·全粒', tone:'good' },
+    { v:'mid',  label:'中GI', sub:'ふつう', tone:'mid' },
+    { v:'hi',   label:'高GI', sub:'白米·パン·甘い', tone:'bad' },
+  ];
+  const morningChoices = [
+    { v:'walk',  label:'散歩', sub:'朝の歩き', tone:'good' },
+    { v:'shower',label:'冷水シャワー', sub:'', tone:'good' },
+    { v:'none',  label:'何もしてない', sub:'', tone:'neutral' },
   ];
   return [
     { id:uid(), role:'habit', type:'sleep',  name:'睡眠', hint:'昨夜の就寝・起床' },
-    { id:uid(), role:'habit', type:'yesno',  name:'朝の散歩', hint:'朝に歩いたか' },
-    { id:uid(), role:'habit', type:'clock',  name:'コーヒー', hint:'飲んだ時刻（最初の1杯）' },
+    { id:uid(), role:'habit', type:'choice', name:'朝の習慣', hint:'朝にやったこと', choices:morningChoices },
+    { id:uid(), role:'habit', type:'clock',  name:'コーヒー', hint:'飲んだ時刻（最初の1杯）', range:{startH:5,endH:18}, noneLabel:'飲んでない' },
     { id:uid(), role:'habit', type:'choice', name:'朝ごはん', hint:'ざっくりGIで', choices:giChoices },
     { id:uid(), role:'habit', type:'choice', name:'昼ごはん', hint:'ざっくりGIで', choices:giChoices },
     { id:uid(), role:'habit', type:'yesno',  name:'昼食後の運動', hint:'食後に動いたか' },
@@ -341,15 +351,22 @@ function snapTime(t){
   if(m===60){ m=0; h=(h+1)%24; }
   return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
 
-function makeTimeSelect(value, onChange){
+function makeTimeSelect(value, onChange, range){
+  // range: {startH, endH} where endH may exceed 24 (e.g. 26 = 02:00 next day).
+  // default: full day 0..24
+  const startH = range ? range.startH : 0;
+  const endH   = range ? range.endH   : 24;
   const sel=document.createElement('select');
   sel.className='time-select';
   const ph=document.createElement('option'); ph.value=''; ph.textContent='--:--'; sel.appendChild(ph);
-  for(let h=0;h<24;h++){
-    for(let m=0;m<60;m+=STEP_MIN){
-      const t=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
-      const o=document.createElement('option'); o.value=t; o.textContent=t; sel.appendChild(o);
-    }
+  for(let total=startH*60; total<endH*60; total+=STEP_MIN){
+    const realH=Math.floor(total/60)%24;
+    const m=total%60;
+    const t=String(realH).padStart(2,'0')+':'+String(m).padStart(2,'0');
+    const o=document.createElement('option'); o.value=t;
+    // label: show "翌" prefix for hours >= 24 so 25:00 reads as 翌01:00
+    o.textContent = total>=24*60 ? '翌'+t : t;
+    sel.appendChild(o);
   }
   sel.value = value ? snapTime(value) : '';
   sel.onchange=()=>onChange(sel.value||null);
@@ -423,11 +440,13 @@ function buildFieldCard(f, value){
     card.appendChild(row);
   }
   else if(f.type==='choice'){
-    const row=document.createElement('div'); row.className='choice-row';
-    const cls={lo:'c-lo',mid:'c-mid',hi:'c-hi'};
+    const row=document.createElement('div'); row.className='choice-row'+(((f.choices||[]).length)===3?' cols-3':'');
+    const toneCls={good:'c-lo', mid:'c-mid', bad:'c-hi', neutral:'c-neu'};
+    const legacy={lo:'c-lo', mid:'c-mid', hi:'c-hi'};
     (f.choices||[]).forEach(c=>{
       const b=document.createElement('button');
-      b.className='choice-btn '+(cls[c.v]||'')+(value===c.v?' on':'');
+      const colorClass = (c.tone && toneCls[c.tone]) || legacy[c.v] || 'c-neu';
+      b.className='choice-btn '+colorClass+(value===c.v?' on':'');
       b.innerHTML=`<span>${escapeHtml(c.label)}</span>${c.sub?`<small>${escapeHtml(c.sub)}</small>`:''}`;
       b.onclick=async()=>{ const nv=(value===c.v)?null:c.v; value=nv;
         row.querySelectorAll('.choice-btn').forEach(x=>x.classList.remove('on'));
@@ -447,9 +466,10 @@ function buildFieldCard(f, value){
   else if(f.type==='clock'){
     let cv = (value && typeof value==='object') ? value : (value?{time:value}:{});
     const wrap=document.createElement('div'); wrap.className='clock-wrap';
+    const rng = f.range || {startH:5, endH:18};
     const sel=makeTimeSelect(cv.time||'', async(t)=>{ cv={time:t}; none.classList.remove('on');
-      await onSave(t?{time:t}:null); value=cv; });
-    const none=document.createElement('button'); none.className='clock-none'+(cv.none?' on':''); none.textContent='飲んでない';
+      await onSave(t?{time:t}:null); value=cv; }, rng);
+    const none=document.createElement('button'); none.className='clock-none'+(cv.none?' on':''); none.textContent=f.noneLabel||'なし';
     none.onclick=async()=>{ if(cv.none){ cv={}; none.classList.remove('on'); await onSave(null); }
       else { cv={none:true}; sel.value=''; none.classList.add('on'); await onSave({none:true}); } value=cv; };
     wrap.appendChild(sel); wrap.appendChild(none); card.appendChild(wrap);
@@ -476,14 +496,14 @@ function buildFieldCard(f, value){
       if(mins==null){ dur.style.display='none'; return; }
       dur.style.display='flex';
       dur.innerHTML=`<span style="font-size:13px;color:var(--text-2);">睡眠時間</span><span style="font-size:18px;font-weight:600;color:var(--accent);">${fmtDur(mins)}</span>`; };
-    const mkCol=(label,key)=>{
+    const mkCol=(label,key,rng)=>{
       const col=document.createElement('div');
       const lab=document.createElement('div'); lab.className='sleep-col-lbl'; lab.textContent=label;
       const sel=makeTimeSelect(sv[key]||'', async(t)=>{ sv[key]=t||''; updateDur();
-        await onSave((sv.bed||sv.wake)?{bed:sv.bed,wake:sv.wake}:null); value=sv; });
+        await onSave((sv.bed||sv.wake)?{bed:sv.bed,wake:sv.wake}:null); value=sv; }, rng);
       col.appendChild(lab); col.appendChild(sel); return col;
     };
-    grid.appendChild(mkCol('就寝','bed')); grid.appendChild(mkCol('起床','wake'));
+    grid.appendChild(mkCol('就寝','bed',{startH:20,endH:26})); grid.appendChild(mkCol('起床','wake',{startH:4,endH:12}));
     card.appendChild(grid); card.appendChild(dur); updateDur();
   }
   else if(f.type==='text'){
@@ -563,18 +583,21 @@ function renderExtra(existing){
       <div class="lbl">＋／− の増減量</div>
       <input class="text-in" id="fStep" type="number" inputmode="decimal" placeholder="1" value="${existing&&existing.step?existing.step:'1'}">`;
   } else if(pendingType==='choice'){
-    if(!pendingChoices) pendingChoices=[{v:'lo',label:'低GI',sub:''},{v:'mid',label:'中GI',sub:''},{v:'hi',label:'高GI',sub:''}];
-    box.innerHTML='<div class="lbl">3つの選択肢（ラベルと補足）</div>';
-    ['lo','mid','hi'].forEach((vk,i)=>{
-      const c=pendingChoices[i]||{v:vk,label:'',sub:''}; c.v=vk; pendingChoices[i]=c;
+    if(!pendingChoices) pendingChoices=[
+      {v:'lo',label:'低GI',sub:'',tone:'good'},
+      {v:'mid',label:'中GI',sub:'',tone:'mid'},
+      {v:'hi',label:'高GI',sub:'',tone:'bad'}
+    ];
+    box.innerHTML='<div class="lbl">選択肢（ラベルと補足）</div>';
+    pendingChoices.forEach((c,i)=>{
       const wrap=document.createElement('div'); wrap.style.cssText='display:flex;gap:8px;margin-bottom:8px;';
-      const l=document.createElement('input'); l.className='text-in'; l.style.flex='1'; l.placeholder=['左','中','右'][i]+'ラベル'; l.value=c.label||'';
+      const l=document.createElement('input'); l.className='text-in'; l.style.flex='1'; l.placeholder='ラベル'; l.value=c.label||'';
       const s=document.createElement('input'); s.className='text-in'; s.style.flex='1'; s.placeholder='補足(任意)'; s.value=c.sub||'';
       l.oninput=()=>c.label=l.value; s.oninput=()=>c.sub=s.value;
       wrap.appendChild(l); wrap.appendChild(s); box.appendChild(wrap);
     });
     const note=document.createElement('p'); note.className='sub'; note.style.marginTop='4px';
-    note.textContent='左=低・中=ふつう・右=高 として色分けされます。';
+    note.textContent='既存の選択肢のラベルを編集できます。色分けは各選択肢の設定を引き継ぎます。';
     box.appendChild(note);
   } else { box.innerHTML=''; }
 }
@@ -590,7 +613,7 @@ async function commitField(existing){
     const s=parseFloat(document.getElementById('fStep').value); data.step=(!isNaN(s)&&s>0)?s:1;
   }
   if(pendingType==='choice'){
-    data.choices=pendingChoices.map(c=>({v:c.v,label:(c.label||'').trim()||c.v,sub:(c.sub||'').trim()}));
+    data.choices=pendingChoices.map(c=>({v:c.v,label:(c.label||'').trim()||c.v,sub:(c.sub||'').trim(),...(c.tone?{tone:c.tone}:{})}));
   }
   if(existing){ const i=fields.findIndex(f=>f.id===existing.id); fields[i]=data; }
   else fields.push(data);
